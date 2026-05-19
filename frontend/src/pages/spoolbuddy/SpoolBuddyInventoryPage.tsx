@@ -148,6 +148,7 @@ export function SpoolBuddyInventoryPage() {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter(s =>
+          String(s.id).includes(q) ||
         s.material.toLowerCase().includes(q) ||
         (s.subtype && s.subtype.toLowerCase().includes(q)) ||
         (s.brand && s.brand.toLowerCase().includes(q)) ||
