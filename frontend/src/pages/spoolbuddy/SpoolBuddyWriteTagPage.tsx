@@ -101,6 +101,7 @@ export function SpoolBuddyWriteTagPage() {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       list = list.filter(s =>
+          String(s.id).includes(q) ||
         (s.material?.toLowerCase().includes(q)) ||
         (s.color_name?.toLowerCase().includes(q)) ||
         (s.brand?.toLowerCase().includes(q)) ||
