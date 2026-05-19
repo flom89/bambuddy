@@ -150,7 +150,7 @@ export function InventorySpoolInfoCard({
 
         <div className="flex-1 min-w-0 pt-1">
           <h3 className="text-lg font-semibold text-zinc-100">
-            {spool.color_name || 'Unknown color'}
+            {spool.id} &bull; {spool.color_name || 'Unknown color'}
           </h3>
           <p className="text-sm text-zinc-400">
             {spool.brand} &bull; {spool.material}
