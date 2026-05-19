@@ -325,9 +325,9 @@ function CatalogCard({ spool, assignment, onClick }: {
       {/* Spool icon */}
       <SpoolCircle color={color} size={56} />
 
-      {/* Material + Subtype */}
+      {/* Spool ID + Material + Subtype */}
       <p className="text-xs font-semibold text-white leading-tight truncate w-full">
-        {spoolDisplayName(spool)}
+        {spool.id} &bull; {spoolDisplayName(spool)}
       </p>
 
       {/* Color dot + name */}
