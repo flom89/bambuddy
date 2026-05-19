@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+//import { useQuery } from '@tanstack/react-query';
+import {useQuery, useQueryClient} from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../../contexts/ToastContext';
 import type { SpoolBuddyOutletContext } from '../../components/spoolbuddy/SpoolBuddyLayout';
@@ -37,6 +38,7 @@ const SIMPLE_COMMON_MATERIALS = ['PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PA', 'PC',
 export function SpoolBuddyWriteTagPage() {
   const { t } = useTranslation();
   const { showToast } = useToast();
+  const queryClient = useQueryClient();
   const { sbState } = useOutletContext<SpoolBuddyOutletContext>();
 
   const [activeTab, setActiveTab] = useState<Tab>('existing');
@@ -48,11 +50,21 @@ export function SpoolBuddyWriteTagPage() {
   const [tagOnReader, setTagOnReader] = useState(false);
   const [tagUid, setTagUid] = useState<string | null>(null);
 
+  const {data: spoolmanSettings} = useQuery({
+    queryKey: ['spoolman-settings'],
+    queryFn: api.getSpoolmanSettings,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const spoolmanMode = spoolmanSettings?.spoolman_enabled === 'true' && !!spoolmanSettings?.spoolman_url;
+
+  const spoolsQueryKey = spoolmanMode ? ['spoolman-inventory-spools'] : ['inventory-spools'];
 
   const { data: spools = [], refetch: refetchSpools } = useQuery({
-    queryKey: ['inventory-spools'],
-    queryFn: () => api.getSpools(false),
-    refetchInterval: 10000,
+    queryKey: spoolsQueryKey,
+    queryFn: () => spoolmanMode ? api.getSpoolmanInventorySpools(false) : api.getSpools(false),
+    enabled: spoolmanSettings !== undefined,
+    refetchInterval: 30000,
   });
 
   const { data: devices = [] } = useQuery({
@@ -69,6 +81,11 @@ export function SpoolBuddyWriteTagPage() {
   const device = devices[0];
   const deviceOnline = sbState.deviceOnline;
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
+
+  const refreshSpools = useCallback(async () => {
+    await refetchSpools();
+    await queryClient.invalidateQueries({queryKey: spoolsQueryKey});
+  }, [queryClient, refetchSpools, spoolsQueryKey]);
 
   // Filter spools based on tab
   const filteredSpools = useMemo(() => {
@@ -118,21 +135,33 @@ export function SpoolBuddyWriteTagPage() {
 
   const handleTagWritten = useCallback((e: Event) => {
     const detail = (e as CustomEvent).detail;
-    if (detail.spool_id === selectedSpool?.id || detail.data?.spool_id === selectedSpool?.id) {
+    const eventSpoolId =
+        detail.spool_id ??
+        detail.data?.spool_id ??
+        detail.spoolman_spool_id ??
+        detail.data?.spoolman_spool_id;
+
+    if (eventSpoolId === selectedSpool?.id) {
       setWriteStatus('success');
       setWriteMessage(t('spoolbuddy.writeTag.writeSuccess', 'Tag written successfully!'));
-      refetchSpools();
+      void refreshSpools();
       setTimeout(() => {
         setWriteStatus('idle');
         setSelectedSpool(null);
         setWriteMessage('');
       }, 5000);
     }
-  }, [selectedSpool, t, refetchSpools]);
+  }, [selectedSpool, t, refreshSpools]);
 
   const handleWriteFailed = useCallback((e: Event) => {
     const detail = (e as CustomEvent).detail;
-    if (detail.spool_id === selectedSpool?.id || detail.data?.spool_id === selectedSpool?.id) {
+    const eventSpoolId =
+        detail.spool_id ??
+        detail.data?.spool_id ??
+        detail.spoolman_spool_id ??
+        detail.data?.spoolman_spool_id;
+
+    if (eventSpoolId === selectedSpool?.id) {
       setWriteStatus('error');
       setWriteMessage(detail.message ?? detail.data?.message ?? t('spoolbuddy.writeTag.writeFailed', 'Write failed'));
     }
@@ -172,9 +201,12 @@ export function SpoolBuddyWriteTagPage() {
           showToast(w, 'warning');
         }
       }
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error
+          ? err.message
+          : t('spoolbuddy.writeTag.queueFailed', 'Failed to queue write command');
       setWriteStatus('error');
-      setWriteMessage(t('spoolbuddy.writeTag.queueFailed', 'Failed to queue write command'));
+      setWriteMessage(message);
     }
   };
 
@@ -193,12 +225,20 @@ export function SpoolBuddyWriteTagPage() {
     setWriteStatus('idle');
     setWriteMessage('');
     try {
-      await api.linkTagToSpool(selectedSpool.id, {
-        tag_uid: '',
-        tray_uuid: '',
-        data_origin: 'manual',
-      });
-      await refetchSpools();
+      if (spoolmanMode) {
+        await api.linkTagToSpoolmanSpool(selectedSpool.id, {
+          tag_uid: '',
+          tray_uuid: '',
+        });
+      } else {
+        await api.linkTagToSpool(selectedSpool.id, {
+          tag_uid: '',
+          tray_uuid: '',
+          data_origin: 'manual',
+        });
+      }
+
+      await refreshSpools();
       setSelectedSpool(null);
       setWriteStatus('success');
       setWriteMessage(t('spoolbuddy.writeTag.untagSuccess', 'Tag removed from spool'));
@@ -206,9 +246,12 @@ export function SpoolBuddyWriteTagPage() {
         setWriteStatus('idle');
         setWriteMessage('');
       }, 2500);
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error
+          ? err.message
+          : t('spoolbuddy.writeTag.untagFailed', 'Failed to remove tag from spool');
       setWriteStatus('error');
-      setWriteMessage(t('spoolbuddy.writeTag.untagFailed', 'Failed to remove tag from spool'));
+      setWriteMessage(message);
     } finally {
       setUntagging(false);
     }
@@ -218,8 +261,8 @@ export function SpoolBuddyWriteTagPage() {
     setSelectedSpool(createdSpool);
     setWriteStatus('idle');
     setWriteMessage('');
-    void refetchSpools();
-  }, [refetchSpools]);
+    void refreshSpools();
+  }, [refreshSpools]);
 
   const canWrite = selectedSpool && deviceOnline && writeStatus !== 'writing' && writeStatus !== 'success';
 
@@ -251,14 +294,40 @@ export function SpoolBuddyWriteTagPage() {
         {/* Left panel — spool list or form */}
         <div className="flex-1 flex flex-col overflow-hidden border-r border-bambu-dark-tertiary">
           {activeTab === 'new' ? (
-            <NewSpoolTouchForm
-              currencySymbol={currencySymbol}
-              onCreated={handleSpoolCreated}
-              selectedSpool={selectedSpool}
-              t={t}
-            />
+              spoolmanMode ? (
+                  <div className="h-full flex items-center justify-center p-6">
+                    <div
+                        className="max-w-sm text-center bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg p-5">
+                      <p className="text-sm font-medium text-zinc-100">
+                        {t('spoolbuddy.writeTag.spoolmanNewDisabledTitle', 'Spoolman inventory is active')}
+                      </p>
+                      <p className="text-xs text-zinc-400 mt-2">
+                        {t(
+                            'spoolbuddy.writeTag.spoolmanNewDisabledBody',
+                            'Create new spools in Spoolman, then return here to write or replace tags.'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+              ) : (
+                  <NewSpoolTouchForm
+                      currencySymbol={currencySymbol}
+                      onCreated={handleSpoolCreated}
+                      selectedSpool={selectedSpool}
+                      t={t}
+                  />
+              )
           ) : (
             <>
+              {spoolmanMode && (
+                  <div className="px-3 pt-3 shrink-0">
+                    <div
+                        className="rounded-lg border border-bambu-green/30 bg-bambu-green/10 px-3 py-2 text-xs text-bambu-green">
+                      {t('spoolbuddy.writeTag.spoolmanMode', 'Using Spoolman inventory')}
+                    </div>
+                  </div>
+              )}
+
               {/* Search */}
               <div className="p-3 shrink-0">
                 <input
@@ -357,15 +426,17 @@ function SpoolListItem({ spool, selected, showTag, onClick }: {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-white truncate">
-            {spool.brand ? `${spool.brand} ` : ''}{spool.material}{spool.subtype ? ` ${spool.subtype}` : ''}
+            {spool.id} &bull; {spool.brand ? `${spool.brand} ` : ''}{spool.material}{spool.subtype ? ` ${spool.subtype}` : ''}
           </span>
         </div>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
           {spool.color_name && <span>{spool.color_name}</span>}
           <span>{remaining}g / {spool.label_weight}g ({pct}%)</span>
         </div>
-        {showTag && spool.tag_uid && (
-          <div className="text-xs text-zinc-500 mt-0.5 font-mono">{spool.tag_uid}</div>
+        {showTag && (spool.tag_uid || spool.tray_uuid) && (
+            <div className="text-xs text-zinc-500 mt-0.5 font-mono truncate">
+              {spool.tag_uid || spool.tray_uuid}
+            </div>
         )}
       </div>
 
